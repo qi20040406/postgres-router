@@ -1,0 +1,2 @@
+# postgres-router
+一个MCP工具，使agent可以查询数据库，可以通过gui切换router以在多个数据库中灵活切换而不必多次修改MCP配置文件

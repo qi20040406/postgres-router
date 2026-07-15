@@ -1,0 +1,14 @@
+# MCP Postgres Router — Database connection configuration
+# Copy this file to config.yml and fill in your credentials.
+
+databases:
+  - name: "example-db"
+    host: "192.168.1.1"
+    port: 5432
+    database: "your_database"
+    username: "your_username"
+    password: "your_password"
+    ssl: false
+    description: "replace with your description"
+
+active: "example-db"

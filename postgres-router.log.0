@@ -1,0 +1,34 @@
+[11:11:37] 信息     com.postgres.router.Main startServerMode - 启动 --server 模式 (HTTP 常驻服务)
+[11:11:37] 信息     com.postgres.router.config.ConfigManager load - 已加载配置，共 1 个数据库配置
+[11:11:37] 信息     com.postgres.router.jdbc.ConnectionPoolManager addPool - 添加连接池: 示例-生产库
+[11:11:37] 信息     com.postgres.router.jdbc.ConnectionPoolManager switchActive - 切换活跃库至: 示例-生产库
+[11:11:38] 信息     com.postgres.router.http.AdminApiServer start - HTTP 管理 API: http://127.0.0.1:18880/api/databases
+[11:11:38] 信息     com.postgres.router.http.AdminApiServer start - MCP 端点:     http://127.0.0.1:18880/mcp
+[11:11:38] 信息     com.postgres.router.http.AdminApiServer start - Agent 会话:   http://127.0.0.1:18880/api/sessions
+[11:11:38] 信息     com.postgres.router.Main startServerMode - === MCP Postgres Router (--server) 启动完成 ===
+[11:11:38] 信息     com.postgres.router.Main startServerMode - MCP HTTP 端点: http://127.0.0.1:18880/mcp  (多 agent 共享)
+[11:11:38] 信息     com.postgres.router.Main startServerMode - 管理 API:     http://127.0.0.1:18880/api/databases
+[11:11:38] 信息     com.postgres.router.Main startServerMode - GUI 模式:     java -jar postgres-router.jar --gui
+[11:12:23] 信息     com.postgres.router.Main startServerMode - 启动 --server 模式 (HTTP 常驻服务)
+[11:12:23] 信息     com.postgres.router.config.ConfigManager load - 已加载配置，共 1 个数据库配置
+[11:12:23] 信息     com.postgres.router.jdbc.ConnectionPoolManager addPool - 添加连接池: 示例-生产库
+[11:12:23] 信息     com.postgres.router.jdbc.ConnectionPoolManager switchActive - 切换活跃库至: 示例-生产库
+[11:12:24] 信息     com.postgres.router.http.AdminApiServer start - HTTP 管理 API: http://127.0.0.1:18880/api/databases
+[11:12:24] 信息     com.postgres.router.http.AdminApiServer start - MCP 端点:     http://127.0.0.1:18880/mcp
+[11:12:24] 信息     com.postgres.router.http.AdminApiServer start - Agent 会话:   http://127.0.0.1:18880/api/sessions
+[11:12:24] 信息     com.postgres.router.Main startServerMode - === MCP Postgres Router (--server) 启动完成 ===
+[11:12:24] 信息     com.postgres.router.Main startServerMode - MCP HTTP 端点: http://127.0.0.1:18880/mcp  (多 agent 共享)
+[11:12:24] 信息     com.postgres.router.Main startServerMode - 管理 API:     http://127.0.0.1:18880/api/databases
+[11:12:24] 信息     com.postgres.router.Main startServerMode - GUI 模式:     java -jar postgres-router.jar --gui
+[11:13:16] 信息     com.postgres.router.mcp.McpServer handleInitialize - 收到 initialize 请求 (client: {name=reasonix, version=dev})
+[11:14:44] 信息     com.postgres.router.jdbc.QueryExecutor executeQuery - 执行查询: SELECT current_database(), current_schema, version();
+[11:14:45] 信息     com.postgres.router.jdbc.QueryExecutor executeQuery - 查询完成，返回 1 行，耗时 279ms
+[11:16:02] 信息     com.postgres.router.mcp.McpServer handleInitialize - 收到 initialize 请求 (client: {name=mcp-remote-fallback-test, version=0.0.0})
+[11:16:32] 严重     com.postgres.router.http.AdminApiServer lambda$registerRoutes$4 - /mcp 处理异常: Connection reset by peer
+[11:16:32] 信息     com.postgres.router.mcp.McpServer handleInitialize - 收到 initialize 请求 (client: {name=mcphost, version=0.1.0})
+[11:20:11] 信息     com.postgres.router.jdbc.QueryExecutor executeQuery - 执行查询: SELECT current_database(), current_schema, version();
+[11:20:11] 信息     com.postgres.router.jdbc.QueryExecutor executeQuery - 查询完成，返回 1 行，耗时 136ms
+[11:20:15] 信息     com.postgres.router.jdbc.QueryExecutor executeQuery - 执行查询: SELECT current_user, inet_server_addr(), inet_server_port();
+[11:20:15] 信息     com.postgres.router.jdbc.QueryExecutor executeQuery - 查询完成，返回 1 行，耗时 174ms
+[11:20:15] 信息     com.postgres.router.jdbc.QueryExecutor executeQuery - 执行查询: SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema') ORDER BY table_schema, table_name LIMIT 20;
+[11:20:15] 信息     com.postgres.router.jdbc.QueryExecutor executeQuery - 查询完成，返回 20 行，耗时 183ms

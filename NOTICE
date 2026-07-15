@@ -1,0 +1,32 @@
+MCP Postgres Router
+Copyright (c) 2025 Contributors
+
+This project includes third-party dependencies governed by their own licenses:
+
+---
+
+Jackson (jackson-databind, jackson-core, jackson-annotations)
+Copyright (c) 2007-2024 FasterXML
+Licensed under Apache License, Version 2.0.
+https://github.com/FasterXML/jackson
+
+---
+
+SnakeYAML
+Copyright (c) 2008-2024 SnakeYAML contributors
+Licensed under Apache License, Version 2.0.
+https://bitbucket.org/snakeyaml/snakeyaml
+
+---
+
+PostgreSQL JDBC Driver
+Copyright (c) 1996-2024 The PostgreSQL Global Development Group
+Licensed under BSD-2-Clause.
+https://jdbc.postgresql.org/
+
+---
+
+JavaFX (javafx-controls, javafx-graphics, javafx-base)
+Copyright (c) 2008-2024 OpenJFX contributors
+Licensed under GPL v2 with Classpath Exception.
+https://openjfx.io/
