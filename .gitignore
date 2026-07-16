@@ -24,8 +24,7 @@ hs_err_pid*
 replay_pid*
 
 # Build output
-target/
-dependency-reduced-pom.xml
+
 
 # Configuration (contains database credentials — DO NOT COMMIT)
 config.yml
