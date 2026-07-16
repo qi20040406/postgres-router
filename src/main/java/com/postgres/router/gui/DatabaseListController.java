@@ -72,7 +72,7 @@ public class DatabaseListController {
         brandBar.getChildren().addAll(appName, spacer, statusDot, statusHint);
 
         // 最小化到托盘按钮
-        javafx.scene.control.Button minimizeBtn = new javafx.scene.control.Button("🗕");
+        javafx.scene.control.Button minimizeBtn = new javafx.scene.control.Button("最小化到托盘");
         minimizeBtn.setStyle(
                 "-fx-background-color: #1565C0;" +
                 " -fx-text-fill: white;" +
@@ -81,7 +81,7 @@ public class DatabaseListController {
                 " -fx-background-radius: 4;" +
                 " -fx-cursor: hand;"
         );
-        minimizeBtn.setTooltip(new Tooltip("Minimize to tray"));
+        minimizeBtn.setTooltip(new Tooltip("最小化到托盘"));
         minimizeBtn.setOnAction(e -> {
             if (stageField != null) {
                 SystemTrayHelper.minimizeToTray(stageField);
@@ -237,41 +237,71 @@ public class DatabaseListController {
 
         tabPane.getTabs().add(sessionTab);
 
-        // ---- Tab 4: 服务日志 ----
-        Tab logTab = new Tab("📟  服务日志");
+        // ---- Tab 4: 请求日志（结构化）----
+        Tab logTab = new Tab("📟  请求日志");
         logTab.setClosable(false);
 
         VBox logContent = new VBox(10);
         logContent.setPadding(new Insets(16));
         logContent.setStyle("-fx-background-color: " + BG_LIGHT + ";");
 
-        Label logTitle = new Label("MCP 服务运行日志");
+        Label logTitle = new Label("MCP 服务请求日志（点击行查看详情）");
         logTitle.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #2c3e50;");
 
-        TextArea logArea = new TextArea();
-        logArea.setEditable(false);
-        logArea.setPrefRowCount(20);
-        logArea.setWrapText(false);
-        logArea.setStyle(
-                "-fx-font-family: 'Consolas', monospace;" +
-                " -fx-font-size: 11px;" +
-                " -fx-text-fill: " + CODE_FG + ";" +
-                " -fx-control-inner-background: #1a1a2e;" +
-                " -fx-border-color: " + CARD_BORDER + ";" +
-                " -fx-border-radius: 4;" +
-                " -fx-background-radius: 4;"
-        );
+        TableView<Map<String, String>> logTable = new TableView<>();
+        logTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        logTable.setStyle("-fx-background-color: white; -fx-border-color: " + CARD_BORDER + "; -fx-border-radius: 4;");
 
-        Label logStatus = new Label("每 3 秒自动刷新");
+        TableColumn<Map<String, String>, String> timeCol = new TableColumn<>("时间");
+        timeCol.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue().get("timestamp")));
+        timeCol.setPrefWidth(180);
+
+        TableColumn<Map<String, String>, String> agentCol = new TableColumn<>("Agent");
+        agentCol.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue().get("agentName")));
+        agentCol.setPrefWidth(120);
+
+        TableColumn<Map<String, String>, String> methodCol = new TableColumn<>("方法");
+        methodCol.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue().get("method")));
+        methodCol.setPrefWidth(100);
+
+        TableColumn<Map<String, String>, String> sqlCol = new TableColumn<>("请求/响应 预览");
+        sqlCol.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue().get("responsePreview")));
+        sqlCol.setPrefWidth(300);
+
+        TableColumn<Map<String, String>, String> statusCol = new TableColumn<>("状态");
+        statusCol.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue().get("isError")));
+        statusCol.setPrefWidth(60);
+
+        TableColumn<Map<String, String>, String> durCol = new TableColumn<>("耗时(ms)");
+        durCol.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(d.getValue().get("durationMs")));
+        durCol.setPrefWidth(80);
+
+        logTable.getColumns().addAll(timeCol, agentCol, methodCol, sqlCol, statusCol, durCol);
+
+        // 点击行查看详情
+        logTable.setRowFactory(tv -> {
+            TableRow<Map<String, String>> row = new TableRow<>();
+            row.setOnMouseClicked(event -> {
+                if (event.getClickCount() == 2 && !row.isEmpty()) {
+                    showLogDetail(row.getItem());
+                }
+            });
+            return row;
+        });
+
+        ObservableList<Map<String, String>> logData = FXCollections.observableArrayList();
+        logTable.setItems(logData);
+
+        Label logStatus = new Label("每 3 秒自动刷新（双击查看详情）");
         logStatus.setStyle("-fx-font-size: 11px; -fx-text-fill: #95a5a6;");
 
-        logContent.getChildren().addAll(logTitle, logArea, logStatus);
+        logContent.getChildren().addAll(logTitle, logTable, logStatus);
         logTab.setContent(logContent);
 
         tabPane.getTabs().add(logTab);
 
         // 启动日志自动刷新
-        startLogRefresh(logArea, logStatus);
+        startLogRefresh(logData, logStatus);
         root.setCenter(tabPane);
 
         // ==================== BOTTOM: 状态栏 ====================
@@ -409,12 +439,12 @@ public class DatabaseListController {
     private String str(Object o) { return o != null ? o.toString() : ""; }
 
     /** 服务日志自动刷新（每 3 秒）*/
-    private void startLogRefresh(TextArea logArea, Label status) {
+    @SuppressWarnings("unchecked")
+    private void startLogRefresh(ObservableList<Map<String, String>> data, Label status) {
         Thread refresher = new Thread(() -> {
-            StringBuilder buffer = new StringBuilder();
             while (true) {
                 try {
-                    URL url = new URI(apiBaseUrl + "/api/logs?lines=200").toURL();
+                    URL url = new URI(apiBaseUrl + "/api/logs?limit=200").toURL();
                     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                     conn.setRequestMethod("GET");
                     conn.setConnectTimeout(3000);
@@ -422,16 +452,22 @@ public class DatabaseListController {
                         String json = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
                         var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
                         Map<String, Object> result = mapper.readValue(json, Map.class);
-                        List<String> lines = (List<String>) result.get("lines");
-                        if (lines != null) {
-                            buffer.setLength(0);
-                            for (String line : lines) {
-                                buffer.append(line).append("\n");
-                            }
+                        List<Map<String, Object>> logs = (List<Map<String, Object>>) result.get("logs");
+                        if (logs != null) {
+                            List<Map<String, String>> rows = logs.stream().map(m -> {
+                                Map<String, String> row = new java.util.LinkedHashMap<>();
+                                row.put("id", str(m.get("id")));
+                                row.put("timestamp", str(m.get("timestamp")));
+                                row.put("agentName", str(m.get("agentName")));
+                                row.put("method", str(m.get("method")));
+                                row.put("responsePreview", str(m.get("responsePreview")));
+                                row.put("isError", Boolean.TRUE.equals(m.get("isError")) ? "❌" : "✅");
+                                row.put("durationMs", String.valueOf(m.get("durationMs")));
+                                return row;
+                            }).toList();
                             Platform.runLater(() -> {
-                                logArea.setText(buffer.toString());
-                                logArea.selectPositionCaret(logArea.getText().length());
-                                status.setText(lines.size() + " lines, auto-refresh 3s");
+                                data.setAll(rows);
+                                status.setText(rows.size() + " 条请求 · 每 3 秒自动刷新（双击查看详情）");
                             });
                         }
                     }
@@ -443,6 +479,44 @@ public class DatabaseListController {
         }, "log-refresher");
         refresher.setDaemon(true);
         refresher.start();
+    }
+
+    /** 双击日志行：弹窗查看详情（回查服务器获取完整内容）*/
+    @SuppressWarnings("unchecked")
+    private void showLogDetail(Map<String, String> row) {
+        String logId = row.get("id");
+        try {
+            URL url = new URI(apiBaseUrl + "/api/logs/" + logId).toURL();
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(3000);
+            if (conn.getResponseCode() == 200) {
+                String json = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                Map<String, Object> detail = mapper.readValue(json, Map.class);
+                String params = str(detail.get("requestParams"));
+                String response = str(detail.get("responseContent"));
+
+                Alert alert = new Alert(Alert.AlertType.INFORMATION);
+                alert.setTitle("日志详情");
+                alert.setHeaderText("请求 " + logId + " · " + detail.get("method"));
+
+                TextArea area = new TextArea(params + "\n\n--- 响应 ---\n" + response);
+                area.setEditable(false);
+                area.setPrefRowCount(18);
+                area.setPrefColumnCount(80);
+                area.setWrapText(false);
+                area.setStyle("-fx-font-family: 'Courier New', monospace; -fx-font-size: 11px;");
+
+                alert.getDialogPane().setExpandableContent(new javafx.scene.layout.VBox(area));
+                alert.getDialogPane().setExpanded(true);
+                alert.setResizable(true);
+                alert.showAndWait();
+            }
+        } catch (Exception e) {
+            Alert err = new Alert(Alert.AlertType.ERROR, e.getMessage());
+            err.showAndWait();
+        }
     }
 
     // ======================== 业务逻辑(保持不变) ========================

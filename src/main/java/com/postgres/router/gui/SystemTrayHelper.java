@@ -28,6 +28,9 @@ public class SystemTrayHelper {
             return;
         }
 
+        // 隐藏唯一的Stage后FX线程不退出，否则Show菜单的Platform.runLater回调无法执行
+        Platform.setImplicitExit(false);
+
         try {
             if (!installed) {
                 installTrayIcon(stage);
@@ -39,6 +42,16 @@ public class SystemTrayHelper {
             }
         } catch (Exception e) {
             LOG.warning("系统托盘操作失败: " + e.getMessage());
+        }
+    }
+
+    /** 清理系统托盘（关闭时调用） */
+    public static void removeTrayIcon() {
+        if (trayIcon != null) {
+            try { SystemTray.getSystemTray().remove(trayIcon); } catch (Exception ignored) {}
+            trayIcon = null;
+            installed = false;
+            LOG.info("系统托盘已移除");
         }
     }
 

@@ -71,6 +71,11 @@ public class StdioTransport implements AutoCloseable, McpTransport {
         });
     }
 
+    @Override
+    public String getRemoteAddr() {
+        return "@stdio";
+    }
+
     /** 发送成功响应 */
     public void sendResponse(Object id, Object result) {
         try {

@@ -81,9 +81,9 @@ public class Main {
         LOG.info("启动 --server 模式 (HTTP 常驻服务)");
 
         ServerComponents c = initComponents();
-        ToolHandler toolHandler = new ToolHandler(c.queryExecutor);
+        ServiceLogStore logStore = new ServiceLogStore(1000);
         HttpMcpTransport transport = new HttpMcpTransport();
-        McpServer mcpServer = new McpServer(transport, c.queryExecutor);
+        McpServer mcpServer = new McpServer(transport, c.queryExecutor, logStore);
 
         AdminApiServer apiServer = new AdminApiServer(
                 ADMIN_API_PORT,
@@ -193,7 +193,7 @@ public class Main {
                 "[%1$tH:%1$tM:%1$tS] %4$-6s %2$s - %5$s%6$s%n");
 
         try {
-            FileHandler fh = new FileHandler("postgres-router.log", 1024 * 1024, 3, true);
+            FileHandler fh = new FileHandler("postgres-router_%g.log", 1024 * 1024, 3, true);
             fh.setFormatter(new SimpleFormatter());
             Logger.getLogger("").addHandler(fh);
         } catch (Exception e) {

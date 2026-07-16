@@ -14,4 +14,7 @@ public interface McpTransport {
 
     /** 发送通知（无 id 的消息） */
     void sendNotification(String method, Object params);
+
+    /** 返回远端地址（无连接的传输返回空字符串） */
+    String getRemoteAddr();
 }

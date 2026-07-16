@@ -34,8 +34,9 @@ public class AdminApp extends Application {
         primaryStage.setMinWidth(640);
         primaryStage.setMinHeight(440);
 
-        // X 按钮直接退出整个进程
+        // X 按钮直接退出整个进程（清理托盘图标）
         primaryStage.setOnCloseRequest(e -> {
+            SystemTrayHelper.removeTrayIcon();
             Platform.exit();
             System.exit(0);
         });

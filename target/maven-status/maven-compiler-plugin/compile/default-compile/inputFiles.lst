@@ -13,5 +13,6 @@ D:\DEVELOP\tools\MCP\postgres-router\src\main\java\com\postgres\router\mcp\HttpM
 D:\DEVELOP\tools\MCP\postgres-router\src\main\java\com\postgres\router\mcp\JsonRpcMessage.java
 D:\DEVELOP\tools\MCP\postgres-router\src\main\java\com\postgres\router\mcp\McpServer.java
 D:\DEVELOP\tools\MCP\postgres-router\src\main\java\com\postgres\router\mcp\McpTransport.java
+D:\DEVELOP\tools\MCP\postgres-router\src\main\java\com\postgres\router\mcp\ServiceLogStore.java
 D:\DEVELOP\tools\MCP\postgres-router\src\main\java\com\postgres\router\mcp\StdioTransport.java
 D:\DEVELOP\tools\MCP\postgres-router\src\main\java\com\postgres\router\mcp\ToolHandler.java

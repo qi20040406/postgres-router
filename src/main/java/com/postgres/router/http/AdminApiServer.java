@@ -4,15 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.postgres.router.config.DatabaseConfig;
 import com.postgres.router.config.RouterConfig;
 import com.postgres.router.jdbc.ConnectionPoolManager;
-import com.postgres.router.mcp.HttpMcpTransport;
-import com.postgres.router.mcp.JsonRpcMessage;
-import com.postgres.router.mcp.McpServer;
+import com.postgres.router.mcp.*;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -20,6 +17,13 @@ import java.util.logging.Logger;
 
 /**
  * HTTP 管理 API + MCP 端点服务器。
+ *
+ * <p>重构要点：
+ * <ul>
+ *   <li>/mcp 端点：创建 HttpMcpTransport 时传入 remoteAddr，由 McpServer 在 initialize 时直接记录</li>
+ *   <li>/api/logs 改为结构化 JSON，支持分页、按 session 过滤、单条详情查看</li>
+ *   <li>移除原有的无效 remoteAddr 补充代码</li>
+ * </ul>
  */
 public class AdminApiServer implements AutoCloseable {
 
@@ -127,7 +131,9 @@ public class AdminApiServer implements AutoCloseable {
             }
         });
 
-        // ---- 服务日志 API ----
+        // ---- 结构化服务日志 API ----
+        // GET /api/logs?limit=100&offset=0&sessionKey=xxx → 列表
+        // GET /api/logs/{id} → 单条详情
         server.createContext("/api/logs", exchange -> {
             try {
                 exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
@@ -141,23 +147,69 @@ public class AdminApiServer implements AutoCloseable {
                     return;
                 }
 
-                // 解析 lines 参数
+                String path = exchange.getRequestURI().getPath();
                 String query = exchange.getRequestURI().getQuery();
-                int maxLines = 100;
-                if (query != null && query.startsWith("lines=")) {
-                    try { maxLines = Integer.parseInt(query.substring(6)); } catch (Exception ignored) {}
-                }
 
-                java.nio.file.Path logPath = java.nio.file.Paths.get("postgres-router.log").toAbsolutePath();
-                if (!java.nio.file.Files.exists(logPath)) {
-                    sendJson(exchange, 200, Map.of("lines", List.of()));
+                // 路径匹配 /api/logs/{id}
+                if (path.length() > "/api/logs/".length()) {
+                    String logId = path.substring("/api/logs/".length());
+                    UUID id;
+                    try {
+                        id = UUID.fromString(logId);
+                    } catch (IllegalArgumentException e) {
+                        sendJson(exchange, 400, Map.of("error", "Invalid log id format"));
+                        return;
+                    }
+                    Optional<ServiceLogStore.LogEntry> opt = mcpServer != null
+                            ? mcpServer.getLogStore().getById(logId)
+                            : Optional.<ServiceLogStore.LogEntry>empty();
+                    if (opt.isPresent()) {
+                        sendJson(exchange, 200, logEntryToDetailMap(opt.get()));
+                    } else {
+                        sendJson(exchange, 404, Map.of("error", "Log not found: " + logId));
+                    }
                     return;
                 }
 
-                java.util.List<String> allLines = java.nio.file.Files.readAllLines(logPath, StandardCharsets.UTF_8);
-                int start = Math.max(0, allLines.size() - maxLines);
-                java.util.List<String> tail = allLines.subList(start, allLines.size());
-                sendJson(exchange, 200, Map.of("lines", tail));
+                // /api/logs 列表
+                int limit = 100;
+                int offset = 0;
+                String sessionKey = null;
+                if (query != null) {
+                    for (String param : query.split("&")) {
+                        String[] kv = param.split("=", 2);
+                        if (kv.length == 2) {
+                            switch (kv[0]) {
+                                case "limit"      -> { try { limit = Integer.parseInt(kv[1]); } catch (Exception ignored) {} }
+                                case "offset"     -> { try { offset = Integer.parseInt(kv[1]); } catch (Exception ignored) {} }
+                                case "sessionKey" -> sessionKey = kv[1];
+                            }
+                        }
+                    }
+                }
+                limit = Math.min(limit, 500);
+
+                List<ServiceLogStore.LogEntry> entries;
+                if (sessionKey != null && !sessionKey.isEmpty()) {
+                    entries = mcpServer != null ? mcpServer.getLogStore().getByAgent(sessionKey, limit) : List.of();
+                } else {
+                    entries = mcpServer != null ? mcpServer.getLogStore().getRecent(limit + offset) : List.of();
+                    if (offset > 0) {
+                        int end = entries.size();
+                        int start = Math.max(0, end - limit);
+                        entries = entries.subList(start, end);
+                    }
+                }
+
+                List<Map<String, Object>> items = new ArrayList<>();
+                for (ServiceLogStore.LogEntry e : entries) {
+                    items.add(logEntryToListMap(e));
+                }
+                Map<String, Object> resp = new LinkedHashMap<>();
+                resp.put("logs", items);
+                resp.put("count", items.size());
+                resp.put("total", mcpServer != null ? mcpServer.getLogStore().size() : 0);
+                sendJson(exchange, 200, resp);
             } catch (Exception e) {
                 sendJson(exchange, 500, Map.of("error", e.getMessage()));
             }
@@ -181,47 +233,16 @@ public class AdminApiServer implements AutoCloseable {
                         return;
                     }
 
-                    // 获取客户端 IP
-                    String remoteAddr = exchange.getRemoteAddress().getAddress().getHostAddress();
+                    // 获取客户端 IP 并传递给 HttpMcpTransport
+                    String remoteAddr = exchange.getRemoteAddress() != null
+                            ? exchange.getRemoteAddress().getAddress().getHostAddress()
+                            : "unknown";
 
                     String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                     JsonRpcMessage.Request req = JsonRpcMessage.parseRequest(body);
 
-                    // 对 initialize 请求，在 session 中记录 remoteAddr
-                    if ("initialize".equals(req.method) && mcpServer != null) {
-                        HttpMcpTransport httpTransport = new HttpMcpTransport();
-                        mcpServer.processRequest(req, httpTransport);
-                        String responseJson = httpTransport.waitForResponse();
-
-                        if (responseJson != null) {
-                            byte[] respBytes = responseJson.getBytes(StandardCharsets.UTF_8);
-                            exchange.sendResponseHeaders(200, respBytes.length);
-                            try (OutputStream os = exchange.getResponseBody()) { os.write(respBytes); }
-
-                            // 补充 remoteAddr 到最近记录的 session
-                            var sessions = mcpServer.getSessions();
-                            for (var entry : sessions.entrySet()) {
-                                if (entry.getValue().remoteAddr().isEmpty()) {
-                                    // 更新 remoteAddr
-                                    McpServer.SessionInfo updated = new McpServer.SessionInfo(
-                                            entry.getValue().clientName(),
-                                            entry.getValue().clientVersion(),
-                                            remoteAddr,
-                                            entry.getValue().connectedAt(),
-                                            entry.getValue().lastActivity()
-                                    );
-                                    // 通过反射替换太麻烦，简单处理：直接更新
-                                    break;
-                                }
-                            }
-                        } else {
-                            exchange.sendResponseHeaders(202, -1);
-                        }
-                        return;
-                    }
-
-                    // 普通请求
-                    HttpMcpTransport httpTransport = new HttpMcpTransport();
+                    // 创建带 remoteAddr 的 transport，McpServer 在 handleInitialize 时会记录
+                    HttpMcpTransport httpTransport = new HttpMcpTransport(remoteAddr);
                     mcpServer.processRequest(req, httpTransport);
 
                     String responseJson = httpTransport.waitForResponse();
@@ -238,6 +259,30 @@ public class AdminApiServer implements AutoCloseable {
                 }
             });
         }
+    }
+
+    // ======================== 日志序列化辅助 ========================
+
+    private Map<String, Object> logEntryToListMap(ServiceLogStore.LogEntry e) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", e.id());
+        m.put("timestamp", e.timestamp().toString());
+        m.put("sessionKey", e.sessionKey());
+        m.put("agentName", e.agentName());
+        m.put("method", e.method());
+        m.put("requestParams", ServiceLogStore.LogEntry.trimParamsPreview(e.requestParams()));
+        m.put("responsePreview", e.responsePreview());
+        m.put("isError", e.isError());
+        m.put("durationMs", e.durationMs());
+        return m;
+    }
+
+    private Map<String, Object> logEntryToDetailMap(ServiceLogStore.LogEntry e) {
+        Map<String, Object> m = logEntryToListMap(e);
+        // 详情接口返回完整内容
+        m.put("requestParams", e.requestParams());
+        m.put("responseContent", e.responseContent());
+        return m;
     }
 
     // ======================== 数据库管理 API ========================
@@ -296,15 +341,20 @@ public class AdminApiServer implements AutoCloseable {
 
     private void handlePutDatabase(com.sun.net.httpserver.HttpExchange exchange, String[] segments) throws IOException {
         if (segments.length < 2 || segments[1].isEmpty()) { sendJson(exchange, 400, Map.of("error", "name is required")); return; }
-        String name = segments[1];
+        String oldName = segments[1];
         DatabaseConfig updated = MAPPER.readValue(exchange.getRequestBody(), DatabaseConfig.class);
-        updated.setName(name);
         RouterConfig config = configProvider.get();
-        config.getDatabases().removeIf(d -> d.getName().equals(name));
+        // 1a 修复：不覆盖 body 中的新名字。用旧名做 removeIf，保留 body 中的新名字用于保存
+        config.getDatabases().removeIf(d -> d.getName().equals(oldName));
+        // 1b 修复：新密码为空时保留原密码（前端不回显密码，用户未重输则 body 中 password="""")
+        if (updated.getPassword() == null || updated.getPassword().isBlank()) {
+            DatabaseConfig existing = config.findByName(oldName);
+            if (existing != null) updated.setPassword(existing.getPassword());
+        }
         config.getDatabases().add(updated);
         configSaver.save(config);
         poolManager.syncWithConfig(config);
-        sendJson(exchange, 200, Map.of("success", true, "name", name));
+        sendJson(exchange, 200, Map.of("success", true, "name", updated.getName()));
     }
 
     private void handleDeleteDatabase(com.sun.net.httpserver.HttpExchange exchange, String[] segments) throws IOException {
@@ -330,6 +380,7 @@ public class AdminApiServer implements AutoCloseable {
         if (mcpServer != null) {
             LOG.info("MCP 端点:     http://127.0.0.1:18880/mcp");
             LOG.info("Agent 会话:   http://127.0.0.1:18880/api/sessions");
+            LOG.info("服务日志:     http://127.0.0.1:18880/api/logs");
         }
     }
 

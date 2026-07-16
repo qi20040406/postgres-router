@@ -19,6 +19,22 @@ public class HttpMcpTransport implements McpTransport {
     private static final Logger LOG = Logger.getLogger(HttpMcpTransport.class.getName());
 
     private final BlockingQueue<String> responseQueue = new ArrayBlockingQueue<>(1);
+    private final String remoteAddr;
+
+    /** 默认构造（无远端信息） */
+    public HttpMcpTransport() {
+        this("");
+    }
+
+    /** 指定远端地址构造 */
+    public HttpMcpTransport(String remoteAddr) {
+        this.remoteAddr = remoteAddr != null ? remoteAddr : "";
+    }
+
+    @Override
+    public String getRemoteAddr() {
+        return remoteAddr;
+    }
 
     @Override
     public void sendResponse(Object id, Object result) {
