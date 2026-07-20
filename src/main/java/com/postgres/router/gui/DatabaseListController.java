@@ -38,12 +38,15 @@ public class DatabaseListController {
     private static final String CARD_BORDER  = "#dcdde1";
     private static final String CODE_BG      = "#1e1e1e";
     private static final String CODE_FG      = "#9cdcfe";
+    private static final String ORANGE       = "#e67e22";
+    private static final String ORANGE_HOVER = "#d35400";
 
     private final String apiBaseUrl;
     private final BorderPane root;
     private final VBox databaseList;
     private final Label statusLabel;
     private final Label statusDot;
+    private final Button restartBtn;
     private javafx.stage.Stage stageField;
 
     @SuppressWarnings("unchecked")
@@ -70,6 +73,12 @@ public class DatabaseListController {
         statusHint.setStyle("-fx-text-fill: " + BRAND_FG + "; -fx-font-size: 11px;");
 
         brandBar.getChildren().addAll(appName, spacer, statusDot, statusHint);
+
+        // 重启服务按钮
+        restartBtn = createStyledButton("🔄 重启服务", ORANGE, ORANGE_HOVER);
+        restartBtn.setTooltip(new Tooltip("重启后台 MCP 服务"));
+        restartBtn.setOnAction(e -> restartService());
+        brandBar.getChildren().add(restartBtn);
 
         // 最小化到托盘按钮
         javafx.scene.control.Button minimizeBtn = new javafx.scene.control.Button("最小化到托盘");
@@ -302,6 +311,8 @@ public class DatabaseListController {
 
         // 启动日志自动刷新
         startLogRefresh(logData, logStatus);
+        // 启动 session 自动刷新
+        startSessionRefresh(sessionData, sessionStatus);
         root.setCenter(tabPane);
 
         // ==================== BOTTOM: 状态栏 ====================
@@ -321,6 +332,75 @@ public class DatabaseListController {
 
         statusBar.getChildren().addAll(statusLabel, statusSpacer, versionLabel);
         root.setBottom(statusBar);
+    }
+
+    // ======================== 重启服务 ========================
+
+    /** 重启服务（ POST /api/service/restart，等待新进程恢复后自动刷新）*/
+    private void restartService() {
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
+                "确定要重启后台 MCP 服务吗？\n所有 Agent 连接将暂时断开。",
+                ButtonType.OK, ButtonType.CANCEL);
+        confirm.setTitle("重启服务");
+        confirm.setHeaderText("重启确认");
+        confirm.showAndWait().ifPresent(result -> {
+            if (result != ButtonType.OK) return;
+            restartBtn.setDisable(true);
+            restartBtn.setText("⏳ 重启中...");
+            statusLabel.setText("正在重启 MCP 服务...");
+            statusDot.setStyle("-fx-text-fill: " + ORANGE + "; -fx-font-size: 10px;");
+
+            new Thread(() -> {
+                try {
+                    // POST /api/service/restart
+                    URL url = new URI(apiBaseUrl + "/api/service/restart").toURL();
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setConnectTimeout(5000);
+                    conn.setReadTimeout(5000);
+                    try { conn.getResponseCode(); } catch (Exception ignored) {}
+
+                    // 等待新进程启动（最多30秒）
+                    boolean recovered = false;
+                    for (int i = 0; i < 30; i++) {
+                        Thread.sleep(1000);
+                        try {
+                            URL healthUrl = new URI(apiBaseUrl + "/api/databases").toURL();
+                            HttpURLConnection hc = (HttpURLConnection) healthUrl.openConnection();
+                            hc.setRequestMethod("GET");
+                            hc.setConnectTimeout(2000);
+                            if (hc.getResponseCode() == 200) {
+                                recovered = true;
+                                break;
+                            }
+                        } catch (java.net.ConnectException e) {
+                            // 服务还在启动，继续等待
+                        } catch (Exception ignored) {}
+                    }
+
+                    final boolean ok = recovered;
+                    Platform.runLater(() -> {
+                        restartBtn.setDisable(false);
+                        restartBtn.setText("🔄 重启服务");
+                        if (ok) {
+                            statusDot.setStyle("-fx-text-fill: " + GREEN + "; -fx-font-size: 10px");
+                            statusLabel.setText("✅ MCP 服务已重启");
+                            refresh();
+                        } else {
+                            statusDot.setStyle("-fx-text-fill: " + ORANGE + "; -fx-font-size: 10px");
+                            statusLabel.setText("⚠ 重启超时，请手动检查");
+                        }
+                    });
+                } catch (Exception e) {
+                    Platform.runLater(() -> {
+                        restartBtn.setDisable(false);
+                        restartBtn.setText("🔄 重启服务");
+                        statusDot.setStyle("-fx-text-fill: " + RED + "; -fx-font-size: 10px");
+                        statusLabel.setText("⚠ 重启失败: " + e.getMessage());
+                    });
+                }
+            }, "service-restart-watcher").start();
+        });
     }
 
     // ======================== 工具方法 ========================
@@ -616,7 +696,7 @@ public class DatabaseListController {
                 " -fx-font-size: 11px; -fx-padding: 3 10 3 10;" +
                 " -fx-background-radius: 3; -fx-border-radius: 3; -fx-cursor: hand;"
         );
-        testBtn.setOnAction(e -> testConnection(name));
+        testBtn.setOnAction(e -> testConnection(name, testBtn));
 
         Button editBtn = new Button("编辑");
         editBtn.setStyle(testBtn.getStyle());
@@ -760,27 +840,94 @@ public class DatabaseListController {
         }
     }
 
-    /** 测试数据库连接 */
-    private void testConnection(String name) {
+    /** 测试数据库连接（后台线程 + 超时 + 错误详情弹窗）*/
+    private void testConnection(String name, Button testBtn) {
+        testBtn.setDisable(true);
+        testBtn.setText("测试中...");
         statusLabel.setText("正在测试连接: " + name + "...");
-        try {
-            URL url = new URI(apiBaseUrl + "/api/databases/" + URLEncoder.encode(name, "UTF-8") + "/test").toURL();
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(10000);
 
-            if (conn.getResponseCode() == 200) {
-                String json = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-                var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                Map<String, Object> result = mapper.readValue(json, Map.class);
-                boolean success = Boolean.TRUE.equals(result.get("success"));
-                statusLabel.setText(success ? "✅ 连接成功: " + name : "❌ 连接失败: " + name);
-            } else {
-                statusLabel.setText("⚠ 测试请求失败");
+        new Thread(() -> {
+            boolean success = false;
+            String message = "";
+            String detail = "";
+            try {
+                URL url = new URI(apiBaseUrl + "/api/databases/" + URLEncoder.encode(name, "UTF-8") + "/test").toURL();
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
+
+                if (conn.getResponseCode() == 200) {
+                    String json = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                    Map<String, Object> result = mapper.readValue(json, Map.class);
+                    success = Boolean.TRUE.equals(result.get("success"));
+                    message = result.get("message") != null ? result.get("message").toString() : "";
+                    detail = result.get("detail") != null ? result.get("detail").toString() : "";
+                } else {
+                    message = "⚠ 测试请求失败，HTTP " + conn.getResponseCode();
+                }
+            } catch (Exception e) {
+                message = "❌ 连接测试异常: " + e.getMessage();
             }
-        } catch (Exception e) {
-            statusLabel.setText("❌ 连接测试异常: " + e.getMessage());
-        }
+
+            final boolean ok = success;
+            final String msg = message;
+            final String det = detail;
+            Platform.runLater(() -> {
+                testBtn.setDisable(false);
+                testBtn.setText("测试");
+                if (ok) {
+                    statusLabel.setText("✅ " + msg + ": " + name);
+                } else {
+                    statusLabel.setText("❌ " + msg);
+                    showTestResultDialog(name, msg, det);
+                }
+            });
+        }, "db-test-worker").start();
+    }
+
+    /** 显示可复制的错误详情对话框 */
+    private void showTestResultDialog(String dbName, String message, String detail) {
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("连接测试失败 — " + dbName);
+        dialog.setHeaderText(null);
+
+        Label headerLabel = new Label(message);
+        headerLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #e74c3c;");
+        headerLabel.setWrapText(true);
+
+        TextArea detailArea = new TextArea(detail.isEmpty() ? "（无详细错误信息）" : detail);
+        detailArea.setEditable(false);
+        detailArea.setWrapText(false);
+        detailArea.setStyle("-fx-font-family: 'Consolas', 'Courier New', monospace; -fx-font-size: 12px;" +
+                " -fx-control-inner-background: #1e1e1e; -fx-text-fill: #9cdcfe;");
+        detailArea.setPrefSize(550, 300);
+
+        DialogPane pane = dialog.getDialogPane();
+        VBox content = new VBox(10, headerLabel, detailArea);
+        content.setPadding(new javafx.geometry.Insets(15));
+        pane.setContent(content);
+
+        ButtonType copyBtnType = new ButtonType("📋 复制错误信息", ButtonBar.ButtonData.OTHER);
+        pane.getButtonTypes().addAll(copyBtnType, ButtonType.CLOSE);
+
+        final var copyBtn = (Button) pane.lookupButton(copyBtnType);
+        copyBtn.setStyle("-fx-background-color: #27ae60; -fx-text-fill: white; -fx-font-weight: bold;");
+        copyBtn.setOnAction(e -> {
+            StringBuilder sb = new StringBuilder();
+            sb.append("数据库: ").append(dbName).append("\n");
+            sb.append("错误: ").append(message).append("\n");
+            if (!detail.isEmpty()) {
+                sb.append("\n--- 详细错误信息 ---\n");
+                sb.append(detail);
+            }
+            ClipboardContent cc = new ClipboardContent();
+            cc.putString(sb.toString());
+            Clipboard.getSystemClipboard().setContent(cc);
+        });
+
+        dialog.showAndWait();
     }
 }

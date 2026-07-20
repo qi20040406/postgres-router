@@ -9,7 +9,11 @@ import com.postgres.router.mcp.*;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -215,6 +219,63 @@ public class AdminApiServer implements AutoCloseable {
             }
         });
 
+        // ---- 服务重启 API ----
+        server.createContext("/api/service/restart", exchange -> {
+            try {
+                exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
+                exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+                exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
+                exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+
+                if ("OPTIONS".equals(exchange.getRequestMethod())) {
+                    exchange.sendResponseHeaders(204, -1);
+                    return;
+                }
+                if (!"POST".equals(exchange.getRequestMethod())) {
+                    sendJson(exchange, 405, Map.of("error", "Method not allowed"));
+                    return;
+                }
+
+                String jarPath = resolveServerJarPath();
+                boolean windows = System.getProperty("os.name", "").toLowerCase().contains("windows");
+                List<String> cmd = new ArrayList<>();
+                if (windows) {
+                    cmd.add(System.getProperty("java.home") + "/bin/javaw");
+                } else {
+                    cmd.add(System.getProperty("java.home") + "/bin/java");
+                }
+                cmd.add("-Dfile.encoding=UTF-8");
+                cmd.add("-jar");
+                cmd.add(jarPath);
+                cmd.add("--server");
+
+                // 立即返回
+                sendJson(exchange, 200, Map.of(
+                        "success", true,
+                        "message", "服务正在重启，请稍候...",
+                        "command", String.join(" ", cmd)
+                ));
+
+                // 守护线程：延迟500ms启动新进程，旧进程仍在处理请求
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(500);
+                        LOG.info("正在重启服务: " + String.join(" ", cmd));
+                        new ProcessBuilder(cmd).start();
+                        // 让当前线程池和 HTTP 服务器有时间发送完响应
+                        Thread.sleep(1000);
+                        LOG.info("旧服务进程退出");
+                        System.exit(0);
+                    } catch (Exception ex) {
+                        LOG.severe("重启服务失败: " + ex.getMessage());
+                    }
+                }, "service-restarter").start();
+
+            } catch (Exception e) {
+                sendJson(exchange, 500, Map.of("error", e.getMessage()));
+            }
+        });
+
         // ---- MCP HTTP 端点 ----
         if (mcpServer != null) {
             server.createContext("/mcp", exchange -> {
@@ -245,13 +306,18 @@ public class AdminApiServer implements AutoCloseable {
                     HttpMcpTransport httpTransport = new HttpMcpTransport(remoteAddr);
                     mcpServer.processRequest(req, httpTransport);
 
-                    String responseJson = httpTransport.waitForResponse();
-                    if (responseJson != null) {
-                        byte[] respBytes = responseJson.getBytes(StandardCharsets.UTF_8);
-                        exchange.sendResponseHeaders(200, respBytes.length);
-                        try (OutputStream os = exchange.getResponseBody()) { os.write(respBytes); }
-                    } else {
+                    // 通知（id == null）不需要等待响应，直接返回 202
+                    if (req.id == null) {
                         exchange.sendResponseHeaders(202, -1);
+                    } else {
+                        String responseJson = httpTransport.waitForResponse();
+                        if (responseJson != null) {
+                            byte[] respBytes = responseJson.getBytes(StandardCharsets.UTF_8);
+                            exchange.sendResponseHeaders(200, respBytes.length);
+                            try (OutputStream os = exchange.getResponseBody()) { os.write(respBytes); }
+                        } else {
+                            exchange.sendResponseHeaders(202, -1);
+                        }
                     }
                 } catch (Exception e) {
                     LOG.severe("/mcp 处理异常: " + e.getMessage());
@@ -334,8 +400,18 @@ public class AdminApiServer implements AutoCloseable {
         } else if ("test".equals(action)) {
             DatabaseConfig db = configProvider.get().findByName(name);
             if (db == null) { try { db = MAPPER.readValue(exchange.getRequestBody(), DatabaseConfig.class); } catch (Exception ignored) {} }
-            boolean ok = (db != null) && poolManager.testConnection(db);
-            sendJson(exchange, 200, Map.of("success", ok, "name", name));
+            ConnectionPoolManager.TestResult result;
+            if (db == null) {
+                result = new ConnectionPoolManager.TestResult(false, "数据库配置「" + name + "」不存在", null);
+            } else {
+                result = poolManager.testConnectionWithDetails(db);
+            }
+            Map<String, Object> resp = new LinkedHashMap<>();
+            resp.put("success", result.success());
+            resp.put("name", name);
+            resp.put("message", result.message());
+            if (result.detail() != null) resp.put("detail", result.detail());
+            sendJson(exchange, 200, resp);
         } else { sendJson(exchange, 404, Map.of("error", "Unknown action: " + action)); }
     }
 
@@ -381,6 +457,38 @@ public class AdminApiServer implements AutoCloseable {
             LOG.info("MCP 端点:     http://127.0.0.1:18880/mcp");
             LOG.info("Agent 会话:   http://127.0.0.1:18880/api/sessions");
             LOG.info("服务日志:     http://127.0.0.1:18880/api/logs");
+        }
+    }
+
+    /**
+     * 解析当前运行的 JAR 文件路径。
+     * 支持 fat JAR 和 exploded classes 目录两种情况。
+     */
+    static String resolveServerJarPath() {
+        try {
+            URI uri = AdminApiServer.class.getProtectionDomain().getCodeSource().getLocation().toURI();
+            Path path = Paths.get(uri).toAbsolutePath().normalize();
+            if (Files.isRegularFile(path) && path.toString().endsWith(".jar")) {
+                return path.toString();
+            }
+            // exploded classes 目录，尝试推导 target/postgres-router.jar
+            Path targetJar = path.resolve("postgres-router.jar");
+            if (Files.isRegularFile(targetJar)) {
+                return targetJar.toString();
+            }
+            // 向上查找 target/postgres-router.jar
+            Path parent = path;
+            while (parent != null) {
+                targetJar = parent.resolve("target").resolve("postgres-router.jar");
+                if (Files.isRegularFile(targetJar)) {
+                    return targetJar.toString();
+                }
+                parent = parent.getParent();
+            }
+            // 兜底：返回当前工作目录下的 postgres-router.jar
+            return Paths.get("target", "postgres-router.jar").toAbsolutePath().toString();
+        } catch (Exception e) {
+            return Paths.get("target", "postgres-router.jar").toAbsolutePath().toString();
         }
     }
 

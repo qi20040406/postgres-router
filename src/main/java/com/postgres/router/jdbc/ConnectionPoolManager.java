@@ -83,6 +83,34 @@ public class ConnectionPoolManager implements AutoCloseable {
         }
     }
 
+    /** 测试连接结果详情 */
+    public record TestResult(boolean success, String message, String detail) {}
+
+    /** 测试数据库连接是否可用（带错误详情）*/
+    public TestResult testConnectionWithDetails(DatabaseConfig config) {
+        String url = config.jdbcUrl();
+        try (Connection conn = java.sql.DriverManager.getConnection(
+                url, config.getUsername(), config.getPassword())) {
+            boolean valid = conn.isValid(5);
+            if (valid) {
+                return new TestResult(true, "连接成功", null);
+            } else {
+                return new TestResult(false, "连接无效", "conn.isValid(5) 返回 false");
+            }
+        } catch (SQLException e) {
+            LOG.warning("连接测试失败: " + config.getName() + " - " + e.getMessage());
+            StringBuilder detail = new StringBuilder();
+            detail.append("SQLState: ").append(e.getSQLState()).append("\n");
+            detail.append("ErrorCode: ").append(e.getErrorCode()).append("\n");
+            detail.append("Message: ").append(e.getMessage());
+            if (e.getCause() != null) {
+                detail.append("\nCaused by: ").append(e.getCause().getClass().getName());
+                detail.append(": ").append(e.getCause().getMessage());
+            }
+            return new TestResult(false, "连接失败: " + e.getMessage(), detail.toString());
+        }
+    }
+
     // ======================== 查询接口 ========================
 
     /** 获取当前活跃数据库的连接 */

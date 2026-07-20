@@ -1,3 +1,4 @@
+com\postgres\router\jdbc\ConnectionPoolManager$TestResult.class
 com\postgres\router\mcp\JsonRpcMessage$ErrorData.class
 com\postgres\router\gui\AdminApp.class
 com\postgres\router\config\DatabaseConfig.class
